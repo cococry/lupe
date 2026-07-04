@@ -366,7 +366,7 @@ static void print_usage(const char *prog) {
   printf("Usage: %s [options]\n"
          "\n"
          "Options:\n"
-         "  -nl, --no-lerp    Disable smooth scrolling & paning\n"
+         "  -nl, --no-lerp    Disable smooth scrolling & panning\n"
          "  -h, --help        Show this help message\n",
          prog);
 }
