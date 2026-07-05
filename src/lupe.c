@@ -2,6 +2,7 @@
 #include <GL/glx.h>
 #include <X11/X.h>
 #include <X11/Xlib.h>
+#include <X11/Xutil.h>
 #include <X11/extensions/Xcomposite.h>
 #include <X11/extensions/Xdamage.h>
 #include <X11/extensions/Xfixes.h>
@@ -28,7 +29,13 @@ static float target_image_pos_y = 0.0f;
 static int dragging = 0;
 static float last_x = 0.0f;
 static float last_y = 0.0f;
-static KeyCode escape_keycode;
+static KeyCode escape_keycode, space_keycode;
+
+static float cursor_x = 0.0f, cursor_y = 0.0f;
+
+static int highlight = 0;
+static float highlight_size = 100.0f;
+static float highlight_target_size = 100.0f;
 
 static int needs_rerender = 1;
 
@@ -141,22 +148,15 @@ GLuint lupe_screenshot_root_to_gl_texture(Display *dpy) {
   return tex;
 }
 
-static int lupe_renderer_init(Display *dpy, Window overlay, GLXContext *o_ctx) {
-  XWindowAttributes overlay_attr;
-  if (!XGetWindowAttributes(dpy, overlay, &overlay_attr)) {
-    nob_log(ERROR, "Failed to get window attributes of overlay window.");
-    return 1;
-  }
+static int lupe_renderer_init(Display *dpy, GLXContext *o_ctx,
+                              XVisualInfo **o_vis) {
+  int attribs[] = {GLX_RGBA, GLX_DOUBLEBUFFER, GLX_DEPTH_SIZE,
+                   24,       GLX_STENCIL_SIZE, 8,
+                   None};
 
-  XVisualInfo match_vis = {0};
-  match_vis.visualid = XVisualIDFromVisual(overlay_attr.visual);
-  match_vis.screen = DefaultScreen(dpy);
+  XVisualInfo *vis = glXChooseVisual(dpy, DefaultScreen(dpy), attribs);
 
-  int n_matches = 0;
-  XVisualInfo *vis = XGetVisualInfo(dpy, VisualIDMask | VisualScreenMask,
-                                    &match_vis, &n_matches);
-
-  if (!vis || n_matches < 1) {
+  if (!vis) {
     nob_log(ERROR, "Overlay window has no X visual info.");
     if (vis) {
       XFree(vis);
@@ -166,35 +166,18 @@ static int lupe_renderer_init(Display *dpy, Window overlay, GLXContext *o_ctx) {
 
   GLXContext ctx = glXCreateContext(dpy, vis, NULL, True);
 
-  XFree(vis);
-
   if (!ctx) {
     nob_log(ERROR, "Failed to create GLX context.");
     return 1;
   }
 
   *o_ctx = ctx;
-
-  if (!glXMakeCurrent(dpy, overlay, ctx)) {
-    nob_log(ERROR, "Failed to set GLX context to overlay window.");
-    glXDestroyContext(dpy, ctx);
-    return 1;
-  }
-
-  glDisable(GL_DEPTH_TEST);
-  glDisable(GL_CULL_FACE);
-  glEnable(GL_BLEND);
-  glBlendFunc(GL_ONE, GL_ONE_MINUS_SRC_ALPHA);
+  *o_vis = vis;
 
   return 0;
 }
 
-void lupe_render_texture(GLuint texture, float x, float y, float width,
-                         float height) {
-  glEnable(GL_TEXTURE_2D);
-  glBindTexture(GL_TEXTURE_2D, texture);
-  glColor4f(1.0f, 1.0f, 1.0f, 1.0f);
-
+void lupe_render_quad(float x, float y, float width, float height) {
   glBegin(GL_QUADS);
   glTexCoord2f(0, 0);
   glVertex2d(x, y);
@@ -206,10 +189,34 @@ void lupe_render_texture(GLuint texture, float x, float y, float width,
   glVertex2d(x, y + height);
   glEnd();
 }
+void lupe_render_texture(GLuint texture, float x, float y, float width,
+                         float height) {
+  glEnable(GL_TEXTURE_2D);
+  glBindTexture(GL_TEXTURE_2D, texture);
+  glColor4f(1.0f, 1.0f, 1.0f, 1.0f);
+
+  lupe_render_quad(x, y, width, height);
+
+  glDisable(GL_TEXTURE_2D);
+}
+
+
+void draw_circle(float cx, float cy, float r, int num_segments) {
+    glBegin(GL_TRIANGLE_FAN);
+    glVertex2f(cx, cy); // Center of the circle
+    for (int i = 0; i <= num_segments; i++) {
+        float theta = 2.0f * 3.1415926f * (float)i / (float)num_segments;
+        float x = r * cosf(theta);
+        float y = r * sinf(theta);
+        glVertex2f(cx + x, cy + y);
+    }
+    glEnd();
+}
 
 void lupe_render_scene(Display *dpy, Window overlay, GLuint root_texture,
                        int root_width, int root_height) {
   glViewport(0, 0, root_width, root_height);
+  glEnable(GL_STENCIL_TEST);
 
   glMatrixMode(GL_PROJECTION);
   glLoadIdentity();
@@ -219,10 +226,35 @@ void lupe_render_scene(Display *dpy, Window overlay, GLuint root_texture,
   glLoadIdentity();
 
   glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
-  glClear(GL_COLOR_BUFFER_BIT);
+  glClear(GL_COLOR_BUFFER_BIT | GL_STENCIL_BUFFER_BIT);
 
+  /* screenshoted root image */
   lupe_render_texture(root_texture, image_pos_x, image_pos_y, root_width * zoom,
                       root_height * zoom);
+  if (highlight) {
+    glColorMask(GL_FALSE, GL_FALSE, GL_FALSE, GL_FALSE);
+
+    glStencilFunc(GL_ALWAYS, 1, 0xFF);
+    glStencilOp(GL_REPLACE, GL_REPLACE, GL_REPLACE);
+    glStencilMask(0xFF);
+
+    float hs = highlight_size * zoom;
+    draw_circle(cursor_x, cursor_y, hs, 60);
+
+    glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+    glStencilMask(0xFF);
+    glStencilFunc(GL_NOTEQUAL, 1, 0xFF);
+    glStencilOp(GL_KEEP, GL_KEEP, GL_KEEP);
+    glStencilMask(0x00);
+
+    glColor4f(0.0f, 0.0f, 0.0f, 0.95f);
+    lupe_render_quad(0, 0, root_width, root_height);
+    
+    glStencilMask(0xFF);
+    glStencilFunc(GL_ALWAYS, 0, 0xFF);
+    glStencilOp(GL_KEEP, GL_KEEP, GL_KEEP);
+    glDisable(GL_STENCIL_TEST);
+  }
 
   glXSwapBuffers(dpy, overlay);
   XFlush(dpy);
@@ -236,17 +268,24 @@ static inline float clampf(float x, float min, float max) {
   return x;
 }
 
-static void lupe_handle_scrollwheel(int up, int mouse_x, int mouse_y) {
+static void lupe_handle_scrollwheel(int up, int mouse_x, int mouse_y, int has_shift) {
+  if(highlight && has_shift) {
+    highlight_target_size = highlight_target_size + (up ? (30.0f * 1 / zoom): (-30.0f * 1 / zoom)); 
+    if(highlight_target_size < 10) {
+      highlight_target_size = 10;
+    }
+    return;
+  }
   float old_zoom = target_zoom;
 
-  float new_zoom = target_zoom + (up ? 0.75f : -0.75f);
+  float new_zoom = target_zoom + (up ? (0.25f * target_zoom) : (-0.25f * target_zoom));
 
   if (new_zoom > 100.0f) {
     new_zoom = 100.0f;
   }
 
-  if (new_zoom < 0.25f) {
-    new_zoom = 0.25f;
+  if (new_zoom < 0.05f) {
+    new_zoom = 0.05f;
   }
 
   target_zoom = new_zoom;
@@ -268,10 +307,12 @@ static int lupe_update_animation(void) {
   float old_zoom = zoom;
   float old_x = image_pos_x;
   float old_y = image_pos_y;
+  float old_hs = highlight_size;
 
   zoom = approach_lerpf(zoom, target_zoom);
   image_pos_x = approach_lerpf(image_pos_x, target_image_pos_x);
   image_pos_y = approach_lerpf(image_pos_y, target_image_pos_y);
+  highlight_size = approach_lerpf(highlight_size, highlight_target_size);
 
   float epsilon = 0.001f;
 
@@ -286,8 +327,13 @@ static int lupe_update_animation(void) {
   if (fabsf(image_pos_y - target_image_pos_y) < epsilon) {
     image_pos_y = target_image_pos_y;
   }
+  
+  if (fabsf(highlight_size - highlight_target_size) < epsilon) {
+    highlight_size = highlight_target_size;
+  }
 
-  return old_zoom != zoom || old_x != image_pos_x || old_y != image_pos_y;
+  return old_zoom != zoom || old_x != image_pos_x || old_y != image_pos_y ||
+         old_hs != highlight_size;
 }
 
 static int lupe_is_animating(void) {
@@ -298,7 +344,8 @@ static int lupe_is_animating(void) {
 
   return fabsf(zoom - target_zoom) > epsilon ||
          fabsf(image_pos_x - target_image_pos_x) > epsilon ||
-         fabsf(image_pos_y - target_image_pos_y) > epsilon;
+         fabsf(image_pos_y - target_image_pos_y) > epsilon ||
+         fabsf(highlight_size - highlight_target_size) > epsilon;
 }
 
 void lupe_handle_event(XEvent *ev, Display *dpy, Window win) {
@@ -307,15 +354,22 @@ void lupe_handle_event(XEvent *ev, Display *dpy, Window win) {
     if (ev->xkey.keycode == escape_keycode) {
       running = false;
     }
+    if (ev->xkey.keycode == space_keycode) {
+      highlight = !highlight;
+      cursor_x = ev->xkey.x;
+      cursor_y = ev->xkey.y;
+      needs_rerender = 1;
+    }
     break;
   case Expose:
     needs_rerender = 1;
     break;
   case ButtonPress: {
     unsigned int button = ev->xbutton.button;
+    unsigned int state = ev->xbutton.state;
     if (button == Button4 || button == Button5) {
       int up = button == Button4;
-      lupe_handle_scrollwheel(up, ev->xbutton.x, ev->xbutton.y);
+      lupe_handle_scrollwheel(up, ev->xbutton.x, ev->xbutton.y, (state & ShiftMask));
       needs_rerender = 1;
     }
     if (ev->xbutton.button == Button1) {
@@ -332,26 +386,32 @@ void lupe_handle_event(XEvent *ev, Display *dpy, Window win) {
     break;
   }
   case MotionNotify: {
-    if (!dragging)
+    if (!dragging && !highlight)
       break;
 
     // drain all queued MotionNotify events
     while (XCheckTypedWindowEvent(dpy, win, MotionNotify, ev)) {
     }
-
-    // this is the top one
+    /* this is the top/last-most event */
 
     int x = ev->xmotion.x; // window-relative, 0,0 top-left
     int y = ev->xmotion.y;
+    if (dragging) {
 
-    int dx = x - last_x;
-    int dy = y - last_y;
+      int dx = x - last_x;
+      int dy = y - last_y;
 
-    target_image_pos_x += dx;
-    target_image_pos_y += dy;
+      target_image_pos_x += dx;
+      target_image_pos_y += dy;
 
-    last_x = x;
-    last_y = y;
+      last_x = x;
+      last_y = y;
+    }
+
+    if (highlight) {
+      cursor_x = x;
+      cursor_y = y;
+    }
 
     needs_rerender = 1;
 
@@ -387,31 +447,58 @@ int main(int argc, char **argv) {
     return EXIT_FAILURE;
   }
 
-  Window root = DefaultRootWindow(dpy);
+  XVisualInfo *vis = NULL;
+  GLXContext glx_ctx;
+  if (lupe_renderer_init(dpy, &glx_ctx, &vis) != 0) {
+    nob_log(ERROR, "Failed to create OpenGL context.");
+    return EXIT_FAILURE;
+  }
+  if(!vis) {
+    nob_log(ERROR, "Failed to create OpenGL context.");
+    return EXIT_FAILURE;
+  }
+
+  Window root = RootWindow(dpy, vis->screen);
   XWindowAttributes attr;
   XGetWindowAttributes(dpy, root, &attr);
 
   int root_width = attr.width;
   int root_height = attr.height;
 
-  int screen = DefaultScreen(dpy);
-  Window win =
-      XCreateSimpleWindow(dpy, root, 0, 0, root_width, root_height, 0,
-                          BlackPixel(dpy, screen), BlackPixel(dpy, screen));
-  XSelectInput(dpy, win,
-               StructureNotifyMask | KeyPressMask | KeyReleaseMask |
+  Colormap cmap = XCreateColormap(dpy, root, vis->visual, AllocNone);
+  printf("Hey.\n");
+
+  XSetWindowAttributes swa;
+  swa.colormap = cmap;
+  swa.event_mask = StructureNotifyMask | KeyPressMask | KeyReleaseMask |
                    ButtonPressMask | ButtonReleaseMask | PointerMotionMask |
-                   ExposureMask | LeaveWindowMask);
+                   ExposureMask | LeaveWindowMask;
+
+  Window win =
+      XCreateWindow(dpy, root, 0, 0, root_width, root_height, 0, vis->depth,
+                    InputOutput, vis->visual, CWColormap | CWEventMask, &swa);
 
   XSetWindowAttributes attributes;
   attributes.override_redirect = True;
   XChangeWindowAttributes(dpy, win, CWOverrideRedirect, &attributes);
 
-  GLXContext glx_ctx;
-  if (lupe_renderer_init(dpy, win, &glx_ctx) != 0) {
-    nob_log(ERROR, "Failed to create OpenGL context.");
-    return EXIT_FAILURE;
+  if (!glXMakeCurrent(dpy, win, glx_ctx)) {
+    nob_log(ERROR, "Failed to set GLX context to overlay window.");
+    glXDestroyContext(dpy, glx_ctx);
+    return 1;
   }
+
+  GLint stencil_bits = 0;
+  glGetIntegerv(GL_STENCIL_BITS, &stencil_bits);
+  printf("Stencil bits: %d\n", stencil_bits);
+
+  glDisable(GL_DEPTH_TEST);
+  glDisable(GL_CULL_FACE);
+  glEnable(GL_BLEND);
+  glEnable(GL_STENCIL_TEST);
+  glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+
+  XFree(vis);
 
   GLuint root_texture = lupe_screenshot_root_to_gl_texture(dpy);
 
@@ -436,13 +523,14 @@ int main(int argc, char **argv) {
   }
 
   escape_keycode = XKeysymToKeycode(dpy, XK_Escape);
+  space_keycode = XKeysymToKeycode(dpy, XK_space);
 
   XEvent ev;
   while (running) {
     if (lupe_is_animating()) {
       while (XPending(dpy) > 0) {
         XNextEvent(dpy, &ev);
-        lupe_handle_event(&ev, dpy, win); 
+        lupe_handle_event(&ev, dpy, win);
       }
 
       lupe_update_animation();
@@ -451,7 +539,7 @@ int main(int argc, char **argv) {
     } else {
       XNextEvent(dpy, &ev);
 
-      lupe_handle_event(&ev, dpy, win); 
+      lupe_handle_event(&ev, dpy, win);
 
       if (needs_rerender) {
         if (!no_lerping) {

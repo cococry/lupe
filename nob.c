@@ -114,7 +114,7 @@ bool build(void)
   nob_cc(&cmd);
   nob_cc_flags(&cmd);
   nob_cc_output(&cmd, BUILD_BINARY);
-  nob_cmd_append(&cmd, "-lGL", "-lX11");
+  nob_cmd_append(&cmd, "-lGL", "-lX11", "-lm");
   nob_cc_inputs(&cmd, "src/lupe.c");
 
   if (!cmd_run(&cmd)) return false;
