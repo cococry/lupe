@@ -466,7 +466,6 @@ int main(int argc, char **argv) {
   int root_height = attr.height;
 
   Colormap cmap = XCreateColormap(dpy, root, vis->visual, AllocNone);
-  printf("Hey.\n");
 
   XSetWindowAttributes swa;
   swa.colormap = cmap;
@@ -487,10 +486,6 @@ int main(int argc, char **argv) {
     glXDestroyContext(dpy, glx_ctx);
     return 1;
   }
-
-  GLint stencil_bits = 0;
-  glGetIntegerv(GL_STENCIL_BITS, &stencil_bits);
-  printf("Stencil bits: %d\n", stencil_bits);
 
   glDisable(GL_DEPTH_TEST);
   glDisable(GL_CULL_FACE);
