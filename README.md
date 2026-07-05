@@ -53,3 +53,5 @@ lupe [options]
 | `Shift + Mousewheel` | Adjust torch highlight radius |
 | `Mousewheel` | Adjust zoom |
 | `Left Click + Drag` | Pan around |
+
+Note that you can change the keybinds and more in the [config.h](https://github.com/cococry/lupe/blob/main/config.h) file (this requires rebuilding).
