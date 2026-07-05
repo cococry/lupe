@@ -38,3 +38,13 @@ lupe [options]
 | `-nl`, `--no-lerp` | Disable smooth scrolling and panning |
 | `-h`, `--help` | Show the help message |
 
+
+## Keybinds
+
+| Keybind | Description |
+|---|---|
+| `Space` | Toggle torch highlight mode |
+| `Escape` | Quit and return to desktop |
+| `Shift + Mousewheel` | Adjust torch highlight radius |
+| `Mousewheel` | Adjust zoom |
+| `Left Click + Drag` | Pan around |
