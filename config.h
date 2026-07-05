@@ -8,7 +8,8 @@
 #define ZOOM_ADJUST_STEP       0.25f  // in % but from 0 to 1
 #define MAX_ZOOM               100.0f // in % but from 0 to 1
 #define MIN_ZOOM               0.05f  // in % but from 0 to 1
-// t value of the lerping function when lerping is enabled
+// t value of the lerping function when lerping is enabled.
+// smaller values mean smoother & longer lerping
 #define LERPING_T 0.3f
 // defines how much darker everything outside the torch
 // highlight should be when not in torch mode. In %
