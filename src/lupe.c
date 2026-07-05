@@ -1,49 +1,42 @@
 #include <GL/gl.h>
 #include <GL/glx.h>
-#include <X11/X.h>
-#include <X11/Xlib.h>
-#include <X11/Xutil.h>
-#include <X11/extensions/Xcomposite.h>
-#include <X11/extensions/Xdamage.h>
-#include <X11/extensions/Xfixes.h>
-#include <X11/extensions/Xrandr.h>
-#include <X11/extensions/shape.h>
 
 #include <X11/Xlib.h>
 #include <math.h>
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
 
 #define NOB_IMPLEMENTATION
 #include "../third_party/nob.h"
 
+#include "../config.h"
+
 #include <sys/time.h>
 
-static float zoom = 1.0f;
-static float target_zoom = 1.0f;
-static float image_pos_x = 0.0f;
-static float image_pos_y = 0.0f;
-static float target_image_pos_x = 0.0f;
-static float target_image_pos_y = 0.0f;
-static int dragging = 0;
-static float last_x = 0.0f;
-static float last_y = 0.0f;
-static KeyCode escape_keycode, space_keycode;
+static float   zoom = 1.0f;
+static float   target_zoom = 1.0f;
+static float   image_pos_x = 0.0f;
+static float   image_pos_y = 0.0f;
+static float   target_image_pos_x = 0.0f;
+static float   target_image_pos_y = 0.0f;
+static int     dragging = 0;
+static float   last_x = 0.0f;
+static float   last_y = 0.0f;
+static KeyCode quit_keycode, highlight_keycode;
 
 static float cursor_x = 0.0f, cursor_y = 0.0f;
 
-static int highlight = 0;
-static float highlight_size = 100.0f;
-static float highlight_target_size = 100.0f;
+static int   highlight = 0;
+static float highlight_size = DEFAULT_HIGHLIGHT_SIZE;
+static float highlight_target_size = DEFAULT_HIGHLIGHT_SIZE;
 
 static int needs_rerender = 1;
 
+// TODO: no_larping would be a better name
 static int no_lerping = 0;
 
 static bool running = true;
 
-void lupe_log_handler(Nob_Log_Level level, const char *fmt, va_list args) {
+static void lupe_log_handler(Nob_Log_Level level, const char *fmt,
+                             va_list args) {
   if (level < nob_minimal_log_level)
     return;
 
@@ -68,7 +61,7 @@ void lupe_log_handler(Nob_Log_Level level, const char *fmt, va_list args) {
   struct timeval tv;
   gettimeofday(&tv, NULL);
 
-  time_t now = tv.tv_sec;
+  time_t    now = tv.tv_sec;
   struct tm tm_utc;
 
 #if defined(_WIN32)
@@ -88,7 +81,7 @@ void lupe_log_handler(Nob_Log_Level level, const char *fmt, va_list args) {
   fprintf(stderr, "\n");
 }
 
-GLuint lupe_screenshot_root_to_gl_texture(Display *dpy) {
+static GLuint lupe_screenshot_root_to_gl_texture(Display *dpy) {
   Window root = DefaultRootWindow(dpy);
 
   XWindowAttributes attrs;
@@ -177,7 +170,7 @@ static int lupe_renderer_init(Display *dpy, GLXContext *o_ctx,
   return 0;
 }
 
-void lupe_render_quad(float x, float y, float width, float height) {
+static void lupe_render_quad(float x, float y, float width, float height) {
   glBegin(GL_QUADS);
   glTexCoord2f(0, 0);
   glVertex2d(x, y);
@@ -189,8 +182,9 @@ void lupe_render_quad(float x, float y, float width, float height) {
   glVertex2d(x, y + height);
   glEnd();
 }
-void lupe_render_texture(GLuint texture, float x, float y, float width,
-                         float height) {
+
+static void lupe_render_texture(GLuint texture, float x, float y, float width,
+                                float height) {
   glEnable(GL_TEXTURE_2D);
   glBindTexture(GL_TEXTURE_2D, texture);
   glColor4f(1.0f, 1.0f, 1.0f, 1.0f);
@@ -200,20 +194,19 @@ void lupe_render_texture(GLuint texture, float x, float y, float width,
   glDisable(GL_TEXTURE_2D);
 }
 
-
 void draw_circle(float cx, float cy, float r, int num_segments) {
-    glBegin(GL_TRIANGLE_FAN);
-    glVertex2f(cx, cy); // Center of the circle
-    for (int i = 0; i <= num_segments; i++) {
-        float theta = 2.0f * 3.1415926f * (float)i / (float)num_segments;
-        float x = r * cosf(theta);
-        float y = r * sinf(theta);
-        glVertex2f(cx + x, cy + y);
-    }
-    glEnd();
+  glBegin(GL_TRIANGLE_FAN);
+  glVertex2f(cx, cy); // Center of the circle
+  for (int i = 0; i <= num_segments; i++) {
+    float theta = 2.0f * M_PI * (float)i / (float)num_segments;
+    float x = r * cosf(theta);
+    float y = r * sinf(theta);
+    glVertex2f(cx + x, cy + y);
+  }
+  glEnd();
 }
 
-void lupe_render_scene(Display *dpy, Window overlay, GLuint root_texture,
+static void lupe_render_scene(Display *dpy, Window overlay, GLuint root_texture,
                        int root_width, int root_height) {
   glViewport(0, 0, root_width, root_height);
   glEnable(GL_STENCIL_TEST);
@@ -247,9 +240,9 @@ void lupe_render_scene(Display *dpy, Window overlay, GLuint root_texture,
     glStencilOp(GL_KEEP, GL_KEEP, GL_KEEP);
     glStencilMask(0x00);
 
-    glColor4f(0.0f, 0.0f, 0.0f, 0.95f);
+    glColor4f(0.0f, 0.0f, 0.0f, TORCH_DARKNESS);
     lupe_render_quad(0, 0, root_width, root_height);
-    
+
     glStencilMask(0xFF);
     glStencilFunc(GL_ALWAYS, 0, 0xFF);
     glStencilOp(GL_KEEP, GL_KEEP, GL_KEEP);
@@ -268,24 +261,46 @@ static inline float clampf(float x, float min, float max) {
   return x;
 }
 
-static void lupe_handle_scrollwheel(int up, int mouse_x, int mouse_y, int has_shift) {
-  if(highlight && has_shift) {
-    highlight_target_size = highlight_target_size + (up ? (30.0f * 1 / zoom): (-30.0f * 1 / zoom)); 
-    if(highlight_target_size < 10) {
+static int lupe_is_scroll_event(Display *dpy, XEvent *ev, XPointer arg) {
+  (void)dpy;
+
+  Window win = *(Window *)arg;
+
+  return ev->type == ButtonPress && ev->xbutton.window == win &&
+         (ev->xbutton.button == Button4 || ev->xbutton.button == Button5);
+}
+
+static void lupe_handle_scrollwheel(int steps, int mouse_x, int mouse_y,
+                                    int has_shift) {
+  if (steps == 0)
+    return;
+
+  if (highlight && has_shift) {
+    highlight_target_size =
+        highlight_target_size + steps * (HIGHLIGHT_ADJUST_STEP * 1 / zoom);
+
+    if (highlight_target_size < 10) {
       highlight_target_size = 10;
     }
+
     return;
   }
+
   float old_zoom = target_zoom;
+  float new_zoom = target_zoom;
 
-  float new_zoom = target_zoom + (up ? (0.25f * target_zoom) : (-0.25f * target_zoom));
-
-  if (new_zoom > 100.0f) {
-    new_zoom = 100.0f;
+  if (steps > 0) {
+    new_zoom = target_zoom * powf(1.0f + ZOOM_ADJUST_STEP, steps);
+  } else {
+    new_zoom = target_zoom * powf(1.0f - ZOOM_ADJUST_STEP, -steps);
   }
 
-  if (new_zoom < 0.05f) {
-    new_zoom = 0.05f;
+  if (new_zoom > (MAX_ZOOM)) {
+    new_zoom = (MAX_ZOOM);
+  }
+
+  if (new_zoom < (MIN_ZOOM)) {
+    new_zoom = (MIN_ZOOM);
   }
 
   target_zoom = new_zoom;
@@ -300,7 +315,7 @@ static void lupe_handle_scrollwheel(int up, int mouse_x, int mouse_y, int has_sh
 static inline float lerpf(float a, float b, float t) { return a + (b - a) * t; }
 
 static inline float approach_lerpf(float current, float target) {
-  return lerpf(current, target, 0.2f);
+  return lerpf(current, target, LERPING_T);
 }
 
 static int lupe_update_animation(void) {
@@ -327,7 +342,7 @@ static int lupe_update_animation(void) {
   if (fabsf(image_pos_y - target_image_pos_y) < epsilon) {
     image_pos_y = target_image_pos_y;
   }
-  
+
   if (fabsf(highlight_size - highlight_target_size) < epsilon) {
     highlight_size = highlight_target_size;
   }
@@ -351,10 +366,10 @@ static int lupe_is_animating(void) {
 void lupe_handle_event(XEvent *ev, Display *dpy, Window win) {
   switch (ev->type) {
   case KeyPress:
-    if (ev->xkey.keycode == escape_keycode) {
+    if (ev->xkey.keycode == quit_keycode) {
       running = false;
     }
-    if (ev->xkey.keycode == space_keycode) {
+    if (ev->xkey.keycode == highlight_keycode) {
       highlight = !highlight;
       cursor_x = ev->xkey.x;
       cursor_y = ev->xkey.y;
@@ -367,16 +382,36 @@ void lupe_handle_event(XEvent *ev, Display *dpy, Window win) {
   case ButtonPress: {
     unsigned int button = ev->xbutton.button;
     unsigned int state = ev->xbutton.state;
+
     if (button == Button4 || button == Button5) {
-      int up = button == Button4;
-      lupe_handle_scrollwheel(up, ev->xbutton.x, ev->xbutton.y, (state & ShiftMask));
+      int steps = button == Button4 ? 1 : -1;
+      int mouse_x = ev->xbutton.x;
+      int mouse_y = ev->xbutton.y;
+      int has_shift = state & ShiftMask;
+
+      XEvent scroll_ev;
+
+      while (XCheckIfEvent(dpy, &scroll_ev, lupe_is_scroll_event,
+                           (XPointer)&win)) {
+        unsigned int scroll_button = scroll_ev.xbutton.button;
+
+        steps += scroll_button == Button4 ? 1 : -1;
+
+        mouse_x = scroll_ev.xbutton.x;
+        mouse_y = scroll_ev.xbutton.y;
+        has_shift = scroll_ev.xbutton.state & ShiftMask;
+      }
+
+      lupe_handle_scrollwheel(steps, mouse_x, mouse_y, has_shift);
       needs_rerender = 1;
     }
+
     if (ev->xbutton.button == Button1) {
       dragging = 1;
       last_x = ev->xbutton.x;
       last_y = ev->xbutton.y;
     }
+
     break;
   }
   case ButtonRelease: {
@@ -448,17 +483,17 @@ int main(int argc, char **argv) {
   }
 
   XVisualInfo *vis = NULL;
-  GLXContext glx_ctx;
+  GLXContext   glx_ctx;
   if (lupe_renderer_init(dpy, &glx_ctx, &vis) != 0) {
     nob_log(ERROR, "Failed to create OpenGL context.");
     return EXIT_FAILURE;
   }
-  if(!vis) {
+  if (!vis) {
     nob_log(ERROR, "Failed to create OpenGL context.");
     return EXIT_FAILURE;
   }
 
-  Window root = RootWindow(dpy, vis->screen);
+  Window            root = RootWindow(dpy, vis->screen);
   XWindowAttributes attr;
   XGetWindowAttributes(dpy, root, &attr);
 
@@ -517,8 +552,8 @@ int main(int argc, char **argv) {
     return EXIT_FAILURE;
   }
 
-  escape_keycode = XKeysymToKeycode(dpy, XK_Escape);
-  space_keycode = XKeysymToKeycode(dpy, XK_space);
+  quit_keycode = XKeysymToKeycode(dpy, QUIT_KEYBIND);
+  highlight_keycode = XKeysymToKeycode(dpy, HIGHLIGHT_KEYBIND);
 
   XEvent ev;
   while (running) {
@@ -543,6 +578,7 @@ int main(int argc, char **argv) {
           zoom = target_zoom;
           image_pos_x = target_image_pos_x;
           image_pos_y = target_image_pos_y;
+          highlight_size = highlight_target_size;
         }
         lupe_render_scene(dpy, win, root_texture, root_width, root_height);
         needs_rerender = 0;
