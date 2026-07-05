@@ -14,6 +14,11 @@ Building:
 ```console
 gcc -o nob nob.c
 ./nob
+```
+
+## Running
+Simply:
+```console
 ./build/lupe
 ```
 
