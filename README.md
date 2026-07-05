@@ -7,7 +7,7 @@ smooth and responsive zooming/panning capabilities.
 ¹ As long as your system supports the widely available OpenGL compatibility profile.
 
 ## Building
-The build dependencies are libGL and libX11.
+The build dependencies are libGL, libX11 and libm.
 Make sure you have those installed before building.
 
 Building:
